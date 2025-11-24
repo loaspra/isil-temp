@@ -5,6 +5,9 @@ import { checkPassword, hashPassword } from '../utils/auth'
 import slug from 'slug'
 import jwt from 'jsonwebtoken'
 import { generateJWT } from '../utils/jwt'
+import formidable from 'formidable'
+import { v4 as uuid } from 'uuid'
+import cloudinary from '../config/cloudinary'
 
 export const createAccount = async(req: Request, res: Response)=>{
 
@@ -75,18 +78,30 @@ export const getUser = async(req: Request, res: Response) => {
 
 export const updateProfile = async (req: Request, res: Response) => {
     try {
-        const { description, links } = req.body
+        const { description, links, image } = req.body
+        const requestedHandle = req.body.handle ? slug(req.body.handle, '') : req.user.handle
 
-        const handle = slug(req.body.handle, '')
-        const handleExists = await User.findOne({ handle })
-        if (handleExists && handleExists.email !== req.user.email) {
-            const error = new Error('Nombre de usuario no disponible')
-            return res.status(409).json({ error: error.message })
+        if (requestedHandle && requestedHandle !== req.user.handle) {
+            const handleExists = await User.findOne({ handle: requestedHandle })
+            if (handleExists && handleExists.email !== req.user.email) {
+                const error = new Error('Nombre de usuario no disponible')
+                return res.status(409).json({ error: error.message })
+            }
+            req.user.handle = requestedHandle
         }
 
-        req.user.description = description
-        req.user.handle = handle
-        req.user.links = links
+        if (typeof description === 'string') {
+            req.user.description = description
+        }
+
+        if (Array.isArray(links)) {
+            req.user.links = links
+        }
+
+        if (typeof image === 'string' && image.length) {
+            req.user.image = image
+        }
+
         await req.user.save()
         res.send('Perfil actualizado correctamente')
     } catch (error) {
@@ -109,5 +124,41 @@ export const getUserByHandle = async (req: Request, res: Response) => {
     } catch (error) {
         const err = new Error('Hubo un error')
         return res.status(500).json({ error: err.message })
+    }
+}
+
+export const uploadImage = async (req: Request, res: Response) => {
+    try {
+        const form = formidable({ multiples: false })
+        form.parse(req, (err, _fields, files) => {
+            if (err) {
+                const error = new Error('Hubo un error al procesar el archivo')
+                return res.status(500).json({ error: error.message })
+            }
+
+            const file = (files.file as formidable.File[] | undefined)?.[0]
+            if (!file?.filepath) {
+                const error = new Error('No se recibió ningún archivo')
+                return res.status(400).json({ error: error.message })
+            }
+
+            cloudinary.uploader.upload(file.filepath, { public_id: uuid() })
+                .then(async result => {
+                    if (result?.secure_url) {
+                        req.user.image = result.secure_url
+                        await req.user.save()
+                        return res.json({ image: result.secure_url })
+                    }
+                    const error = new Error('Hubo un error al subir la imagen')
+                    return res.status(500).json({ error: error.message })
+                })
+                .catch(() => {
+                    const error = new Error('Hubo un error al subir la imagen')
+                    return res.status(500).json({ error: error.message })
+                })
+        })
+    } catch (e) {
+        const error = new Error('Hubo un error')
+        return res.status(500).json({ error: error.message })
     }
 }

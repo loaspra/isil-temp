@@ -25,7 +25,7 @@ export async function getUserByHandle(handle: string){
     }
 }
 
-export async function updateProfile(formData: User) {
+export async function updateProfile(formData: Partial<User>) {
     try {
         const { data } = await api.put<string>('/user', formData)
         return data
@@ -33,5 +33,23 @@ export async function updateProfile(formData: User) {
         if (isAxiosError(error) && error.response) {
             throw new Error(error.response.data.error)
         }
+        throw error
+    }
+}
+
+export async function uploadImage(file: File) {
+    try {
+        const formData = new FormData()
+        formData.append('file', file)
+
+        const { data } = await api.post<{ image: string }>('/user/image', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        return data.image
+    } catch (error) {
+        if (isAxiosError(error) && error.response) {
+            throw new Error(error.response.data.error)
+        }
+        throw error
     }
 }

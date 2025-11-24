@@ -1,7 +1,7 @@
 import {Router} from 'express'
 import {body} from 'express-validator' //body permite validar el req.body
 import User from './models/User'
-import { createAccount, getUser, getUserByHandle, login, updateProfile } from './handlers'
+import { createAccount, getUser, getUserByHandle, login, updateProfile, uploadImage } from './handlers'
 import { handleInputErrors } from './middleware/validation'
 import { authenticate } from './middleware/auth'
 
@@ -28,6 +28,7 @@ router.post('/auth/login',
 
 router.get('/user', authenticate, getUser)
 router.put('/user', authenticate, updateProfile)
+router.post('/user/image', authenticate, uploadImage)
 
 // Public route - get user by handle
 router.get('/:handle', getUserByHandle)

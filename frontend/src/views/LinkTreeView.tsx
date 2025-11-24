@@ -1,129 +1,115 @@
+import type React from "react"
 import { useEffect, useState } from "react"
 import { social } from "../data/social"
 import DevTreeInput from "../components/DevTreeInput"
 import { isValidUrl } from "../utils"
 import { toast } from "sonner"
-import { useQueryClient, useMutation } from "@tanstack/react-query"
-import { updateProfile } from "../api/DevTreeApi"
+import { useQueryClient, useMutation, useQuery } from "@tanstack/react-query"
+import { getUser, updateProfile } from "../api/DevTreeApi"
 import type { SocialNetwork, User } from "../types"
 
 export default function LinkTreeView() {
-    const [devTreeLinks, setDevTreeLinks] = useState(social)
+    const [devTreeLinks, setDevTreeLinks] = useState<SocialNetwork[]>(social)
     const queryClient = useQueryClient()
-    const user: User = queryClient.getQueryData(['user'])!
+    const existingUser = queryClient.getQueryData<User>(['user'])
+    const { data: user } = useQuery({
+        queryKey: ['user'],
+        queryFn: getUser,
+        initialData: existingUser,
+        staleTime: 1000 * 60,
+        refetchOnWindowFocus: false
+    })
 
-    const { mutate: updateProfileMutation } = useMutation({
+    const { mutate: updateProfileMutation, isPending } = useMutation({
         mutationFn: updateProfile,
         onError: (error) => {
             toast.error(error.message)
         },
         onSuccess: () => {
             toast.success('Actualizado Correctamente')
+            queryClient.invalidateQueries({ queryKey: ['user'] })
         }
     })
 
     useEffect(() => {
-        const updatedData = devTreeLinks.map(item => {
-            const userLink = (user.links as SocialNetwork[]).find((link: SocialNetwork) => link.name === item.name)
-            if (userLink) {
-                return { ...item, url: userLink.url, enabled: userLink.enabled }
-            }
-            return item
+        if (!user) return
+
+        setDevTreeLinks(prev => {
+            const prevMap = new Map(prev.map(link => [link.name, link]))
+            const socialMap = new Map(social.map(item => [item.name, item]))
+
+            // Use user.links order (which preserves drag order), not social array order
+            return (user.links as SocialNetwork[]).map(stored => {
+                const item = socialMap.get(stored.name) || stored
+                const baseLink = { ...item, ...stored }
+                const previous = prevMap.get(stored.name)
+
+                if (!previous) return baseLink
+
+                const hasLocalUrlChange = previous.url !== baseLink.url
+                return {
+                    ...baseLink,
+                    url: hasLocalUrlChange ? previous.url : baseLink.url
+                }
+            })
         })
-        setDevTreeLinks(updatedData)
-    }, [])
+    }, [user])
 
     const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const updatedLinks = devTreeLinks.map(link =>
-            link.name === e.target.name ? { ...link, url: e.target.value } : link
+        const { name, value } = e.target
+        setDevTreeLinks(prev =>
+            prev.map(link => link.name === name ? { ...link, url: value } : link)
         )
-        setDevTreeLinks(updatedLinks)
     }
 
     const handleEnableLink = (socialNetwork: string) => {
-        const targetLink = devTreeLinks.find(link => link.name === socialNetwork)
-        
-        // Block enabling if URL is invalid
-        if (targetLink && !targetLink.enabled && !isValidUrl(targetLink.url)) {
-            toast.error('URL no válida')
-            return
-        }
+        setDevTreeLinks(prev => {
+            const targetLink = prev.find(link => link.name === socialNetwork)
+            if (!targetLink) return prev
 
-        const updatedLinks = devTreeLinks.map(link => {
-            if (link.name === socialNetwork) {
-                return { ...link, enabled: !link.enabled }
+            // Block enabling if URL is invalid or empty
+            if (!targetLink.enabled && !isValidUrl(targetLink.url)) {
+                toast.error('URL no válida')
+                return prev
             }
-            return link
-        })
 
-        setDevTreeLinks(updatedLinks)
+            const toggled = prev.map(link =>
+                link.name === socialNetwork ? { ...link, enabled: !link.enabled } : link
+            )
 
-        // Build from current state - get currently enabled count to determine next ID
-        const currentEnabledCount = updatedLinks.filter(link => link.enabled && link.name !== socialNetwork).length
-        const toggledLink = updatedLinks.find(link => link.name === socialNetwork)
-        
-        let updatedItems: SocialNetwork[] = []
-        
-        if (toggledLink?.enabled) {
-            // Enabling: assign next sequential ID
-            const newId = currentEnabledCount + 1
-            updatedItems = updatedLinks.map(link => ({
-                name: link.name,
-                url: link.url,
-                enabled: link.enabled,
-                id: link.enabled ? (link.name === socialNetwork ? newId : link.id || 0) : 0
-            })).filter(link => link.url) // Only include links with URLs
-        } else {
-            // Disabling: rebuild all IDs sequentially
-            let nextId = 1
-            updatedItems = updatedLinks.map(link => ({
-                name: link.name,
-                url: link.url,
-                enabled: link.enabled,
-                id: link.enabled ? nextId++ : 0
-            })).filter(link => link.url)
-        }
+            const enabledOrdered = toggled
+                .filter(link => link.enabled)
+                .sort((a, b) => {
+                    const aId = a.id || Number.MAX_SAFE_INTEGER
+                    const bId = b.id || Number.MAX_SAFE_INTEGER
+                    return aId - bId
+                })
+                .map((link, index) => ({ ...link, id: index + 1 }))
 
-        // Update cache with array
-        queryClient.setQueryData(['user'], (prevData: User) => {
-            return {
-                ...prevData,
-                links: updatedItems
-            }
+            const finalLinks = toggled.map(link => {
+                const match = enabledOrdered.find(item => item.name === link.name)
+                return match ? match : { ...link, enabled: false, id: 0 }
+            })
+
+            queryClient.setQueryData(['user'], (prevUser?: User) => prevUser ? { ...prevUser, links: finalLinks } : prevUser)
+
+            return finalLinks
         })
     }
 
     const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault()
-        
-        // Build payload from current devTreeLinks state, only including enabled links with sequential IDs
-        const enabledLinks = devTreeLinks
-            .filter(link => link.enabled)
-            .map((link, index) => ({
-                name: link.name,
-                url: link.url,
-                enabled: link.enabled,
-                id: index + 1 // Sequential IDs: 1, 2, 3...
-            }))
-        
-        // Include disabled links with id: 0
-        const disabledLinks = devTreeLinks
-            .filter(link => !link.enabled && link.url)
-            .map(link => ({
-                name: link.name,
-                url: link.url,
-                enabled: link.enabled,
-                id: 0
-            }))
-        
-        const allLinks = [...enabledLinks, ...disabledLinks]
-        
-        const updatedUser = {
+        if (!user) return
+
+        const payloadLinks = devTreeLinks.map(link => ({
+            ...link,
+            id: link.enabled ? link.id : 0
+        }))
+
+        updateProfileMutation({
             ...user,
-            links: allLinks
-        }
-        
-        updateProfileMutation(updatedUser)
+            links: payloadLinks
+        })
     }
 
     return (
@@ -142,7 +128,8 @@ export default function LinkTreeView() {
 
             <button
                 type="submit"
-                className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded w-full"
+                className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded w-full disabled:opacity-50"
+                disabled={isPending}
             >
                 Guardar Cambios
             </button>
