@@ -34,25 +34,25 @@ export default function LinkTreeView() {
     useEffect(() => {
         if (!user) return
 
-        setDevTreeLinks(prev => {
-            const prevMap = new Map(prev.map(link => [link.name, link]))
-            const socialMap = new Map(social.map(item => [item.name, item]))
+        const userLinks = (user.links as SocialNetwork[]) || []
 
-            // Use user.links order (which preserves drag order), not social array order
-            return (user.links as SocialNetwork[]).map(stored => {
-                const item = socialMap.get(stored.name) || stored
-                const baseLink = { ...item, ...stored }
-                const previous = prevMap.get(stored.name)
-
-                if (!previous) return baseLink
-
-                const hasLocalUrlChange = previous.url !== baseLink.url
-                return {
-                    ...baseLink,
-                    url: hasLocalUrlChange ? previous.url : baseLink.url
-                }
+        const enabledSorted = userLinks
+            .filter(link => link.enabled)
+            .sort((a, b) => {
+                if (a.id === b.id) return a.name.localeCompare(b.name)
+                return a.id - b.id
             })
-        })
+            .map((link, index) => ({ ...link, id: index + 1 }))
+
+        const disabledExisting = userLinks
+            .filter(link => !link.enabled)
+            .map(link => ({ ...link, id: 0, enabled: false }))
+
+        const missingNetworks = social
+            .filter(item => !userLinks.some(link => link.name === item.name))
+            .map(item => ({ ...item, id: 0, enabled: false }))
+
+        setDevTreeLinks([...enabledSorted, ...disabledExisting, ...missingNetworks])
     }, [user])
 
     const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,10 +101,25 @@ export default function LinkTreeView() {
         e.preventDefault()
         if (!user) return
 
-        const payloadLinks = devTreeLinks.map(link => ({
-            ...link,
-            id: link.enabled ? link.id : 0
-        }))
+        const cachedUser = queryClient.getQueryData<User>(['user'])
+        const cachedLinks = (cachedUser?.links as SocialNetwork[]) || []
+        const localMap = new Map(devTreeLinks.map(link => [link.name, link]))
+
+        const payloadLinks = (cachedLinks.length ? cachedLinks : devTreeLinks).map(link => {
+            const local = localMap.get(link.name)
+            const merged = local ? { ...link, ...local } : link
+            return {
+                ...merged,
+                id: merged.enabled ? merged.id : 0
+            }
+        })
+
+        // Include any socials missing from cache (e.g., new defaults)
+        devTreeLinks.forEach(link => {
+            if (!payloadLinks.find(item => item.name === link.name)) {
+                payloadLinks.push({ ...link, id: link.enabled ? link.id : 0 })
+            }
+        })
 
         updateProfileMutation({
             ...user,

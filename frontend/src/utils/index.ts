@@ -3,6 +3,13 @@ export function classNames(...classes: string[]) {
 }
 
 export const isValidUrl = (url: string): boolean => {
-    const regex = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)/
-    return regex.test(url)
+    const trimmed = url.trim()
+    try {
+        const parsed = new URL(trimmed)
+        const isHttp = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+        const hasHostnameDot = parsed.hostname.includes('.')
+        return isHttp && hasHostnameDot
+    } catch {
+        return false
+    }
 }
